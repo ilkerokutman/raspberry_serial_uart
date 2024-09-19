@@ -1,0 +1,23 @@
+name: hee_uart
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.3
+
+dependencies:
+  dart_periphery: ^0.9.6
+  flutter:
+    sdk: flutter
+  flutter_libserialport: ^0.4.0
+  rpi_gpio: ^0.10.0
+  window_manager: ^0.4.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
