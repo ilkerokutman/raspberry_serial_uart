@@ -5,6 +5,7 @@ import 'package:dart_periphery/dart_periphery.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
+import 'package:hee_uart/message_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 bool isPi = !kDebugMode;
@@ -26,11 +27,51 @@ extension IntToString on int {
   }
 }
 
+List<int> getCrcBytes(int value) {
+  int firstByte = value % 256; // Remainder after dividing by 256
+  int secondByte = value ~/ 256; // Integer division by 256
+  return [firstByte, secondByte];
+}
+
+int serialUartCrc16(Uint8List data) {
+  const List<int> crcTable = [
+    0x0000,
+    0x1021,
+    0x2042,
+    0x3063,
+    0x4084,
+    0x50a5,
+    0x60c6,
+    0x70e7,
+    0x8108,
+    0x9129,
+    0xa14a,
+    0xb16b,
+    0xc18c,
+    0xd1ad,
+    0xe1ce,
+    0xf1ef
+  ];
+
+  int crc = 0xFFFF;
+
+  for (int i = 0; i < data.length; i++) {
+    int byte = data[i];
+    crc = (crc << 4) ^ crcTable[((crc >> 12) ^ (byte >> 4)) & 0x0F];
+    crc = (crc << 4) ^ crcTable[((crc >> 12) ^ (byte & 0x0F)) & 0x0F];
+  }
+
+  return crc & 0xFFFF;
+}
+
 int startByte = 0x3A;
 int stopByte = 0x0D;
 
 String bytesToHex(List<int> bytes) {
-  return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('');
+  return bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join(' ')
+      .toUpperCase();
 }
 
 String uint8ListToHex(Uint8List bytes) {
@@ -154,6 +195,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool connectionStatus = false;
   List<int> receivedStack = [];
   List<List<int>> receivedStackCommands = [];
+  SerialMessageHandler handler = SerialMessageHandler();
 
   @override
   void initState() {
@@ -162,12 +204,40 @@ class _HomeScreenState extends State<HomeScreen> {
       initPin();
     }
     discoverPorts();
+    handler.onMessage.listen((Uint8List message) {
+      // Handle the received message
+
+      List<int> data = intListToUint8List(message);
+      int crcInt = serialUartCrc16(
+          intListToUint8List([data[1], data[2], data[3], data[4]]));
+      List<int> crcBytes = getCrcBytes(crcInt);
+      if (crcBytes[0] == data[5] && crcBytes[1] == data[6]) {
+        setState(() {
+          receivedStackCommands.insert(0, uint8ListToIntList(message));
+        });
+      } else {
+        setState(() {
+          receivedStackCommands.insert(0, [
+            0x00,
+            data[1],
+            data[2],
+            data[3],
+            data[4],
+            data[5],
+            data[6],
+            data[7],
+            data[8],
+          ]);
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     messageSubscription.cancel();
     closePort();
+    handler.dispose();
     super.dispose();
   }
 
@@ -248,7 +318,8 @@ class _HomeScreenState extends State<HomeScreen> {
       reader = SerialPortReader(selectedPort!, timeout: 2000);
       addLog('created SerialPortReader');
       messageSubscription = reader.stream.listen((data) {
-        final messageBuffer = Uint8List(data.length + receivedStack.length);
+        handler.onDataReceived(data);
+        /* final messageBuffer = Uint8List(data.length + receivedStack.length);
 
         // Copy received bytes to the buffer
         for (int i = 0; i < receivedStack.length; i++) {
@@ -264,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         // Extract messages from the buffer
-        extractMessages(messageBuffer);
+        extractMessages(messageBuffer); */
 
         // addLog('receivedData: ${messageBuffer.toList()}');
 
@@ -308,7 +379,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void extractMessages(Uint8List buffer) {
+  /* void extractMessages(Uint8List buffer) {
     int messageStart = 0;
 
     for (int i = 0; i < buffer.length; i++) {
@@ -342,13 +413,13 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       receivedStack.addAll(buffer.sublist(messageStart));
     });
-  }
+  } */
 
-  void onMessageReceived(Uint8List message) {
+  /* void onMessageReceived(Uint8List message) {
     setState(() {
       receivedStackCommands.insert(0, uint8ListToIntList(message));
     });
-  }
+  } */
 
   void configurePort(port) {
     if (port == null) return;
@@ -362,10 +433,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void sendMessage(List<int> message) async {
-    Uint8List bytes = Uint8List.fromList(message);
-    addLog('sending message: ${bytesToHex(bytes)}');
+    List<int> data = [message[1], message[2], message[3], message[4]];
+    int crc = serialUartCrc16(intListToUint8List(data));
+    List<int> crcBytes = getCrcBytes(crc);
+    List<int> messageWithCrc = [
+      message[0],
+      message[1],
+      message[2],
+      message[3],
+      message[4],
+      crcBytes[0],
+      crcBytes[1],
+      message[7],
+      message[8]
+    ];
+
+    Uint8List bytes = Uint8List.fromList(messageWithCrc);
+    addLog('sending: ${bytesToHex(bytes)}');
     await changeTxMode(true);
-    final bytesWritten = selectedPort!.write(bytes);
+    // final bytesWritten =
+    selectedPort!.write(bytes);
     // addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
     // addLog('bytes written: $bytesWritten');
     await Future.delayed(const Duration(milliseconds: 10));
@@ -450,27 +537,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const VerticalDivider(width: 1),
                     Expanded(
-                      flex: 3,
+                      flex: 2,
                       child: ListView.builder(
                         itemBuilder: (context, index) => logs[index].toWidget(),
                         itemCount: logs.length,
                       ),
                     ),
-                    VerticalDivider(width: 1),
-                    Expanded(
-                      flex: 1,
-                      child: ListView.separated(
-                        itemBuilder: (context, index) =>
-                            Text(bytesToHex([receivedStack[index]])),
-                        itemCount: receivedStack.length,
-                        separatorBuilder: (context, index) =>
-                            receivedStack[index] == stopByte ||
-                                    receivedStack[index] == startByte
-                                ? Divider()
-                                : Container(),
-                      ),
-                    ),
-                    VerticalDivider(width: 1),
+                    // VerticalDivider(width: 1),
+                    // Expanded(
+                    //   flex: 1,
+                    //   child: ListView.separated(
+                    //     itemBuilder: (context, index) =>
+                    //         Text(bytesToHex([receivedStack[index]])),
+                    //     itemCount: receivedStack.length,
+                    //     separatorBuilder: (context, index) =>
+                    //         receivedStack[index] == stopByte ||
+                    //                 receivedStack[index] == startByte
+                    //             ? Divider()
+                    //             : Container(),
+                    //   ),
+                    // ),
+                    const VerticalDivider(width: 1),
                     Expanded(
                       flex: 1,
                       child: ListView.builder(
