@@ -26,6 +26,9 @@ extension IntToString on int {
   }
 }
 
+int startByte = 0x3A;
+int stopByte = 0x0D;
+
 String bytesToHex(List<int> bytes) {
   return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('');
 }
@@ -64,6 +67,14 @@ List<CommandDef> availableCommands = [
   CommandDef(
     name: 'Single Off',
     command: [0x3A, 0x01, 0x68, 0x06, 0x00, 0x00, 0x00, 0x0D, 0x0A],
+  ),
+  CommandDef(
+    name: 'Read Outputs',
+    command: [0x3A, 0x01, 0x69, 0x00, 0x00, 0x00, 0x00, 0x0D, 0x0A],
+  ),
+  CommandDef(
+    name: 'Read Inputs',
+    command: [0x3A, 0x01, 0x67, 0x00, 0x00, 0x00, 0x00, 0x0D, 0x0A],
   ),
 ];
 
@@ -141,6 +152,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool txMode = false;
   bool ready = false;
   bool connectionStatus = false;
+  List<int> receivedStack = [];
+  List<List<int>> receivedStackCommands = [];
 
   @override
   void initState() {
@@ -235,16 +248,106 @@ class _HomeScreenState extends State<HomeScreen> {
       reader = SerialPortReader(selectedPort!, timeout: 2000);
       addLog('created SerialPortReader');
       messageSubscription = reader.stream.listen((data) {
-        List<int> result = List.filled(data.length, 0);
+        final messageBuffer = Uint8List(data.length + receivedStack.length);
+
+        // Copy received bytes to the buffer
+        for (int i = 0; i < receivedStack.length; i++) {
+          messageBuffer[i] = receivedStack[i];
+        }
+
+        // Append new data to the buffer
+        messageBuffer.setAll(receivedStack.length, data);
+
+        // Reset received stack
+        setState(() {
+          receivedStack.clear();
+        });
+
+        // Extract messages from the buffer
+        extractMessages(messageBuffer);
+
+        // addLog('receivedData: ${messageBuffer.toList()}');
+
+        /*  List<int> result = List.filled(data.length, 0);
         for (int i = 0; i < data.length; i++) {
           result[i] = data[i];
+          setState(() {
+            receivedStack.add(data[i]);
+          });
         }
         addLog('receivedData: $result');
+
+        bool firstDelimiterFound = false;
+        int startIndex = 0;
+
+        for (int i = 0; i < receivedStack.length; i++) {
+          if (!firstDelimiterFound && receivedStack[i] == 0x3A) {
+            firstDelimiterFound = true;
+            startIndex = i + 1;
+          } else if (firstDelimiterFound && i - startIndex == 8) {
+            setState(() {
+              receivedStackCommands
+                  .add(receivedStack.sublist(startIndex, i + 1));
+            });
+            startIndex = i + 1;
+          }
+        }
+
+        // Keep remaining bytes
+        setState(() {
+          if (startIndex < receivedStack.length) {
+            receivedStack = receivedStack.sublist(startIndex);
+          } else {
+            receivedStack.clear();
+          }
+        }); */
       });
       addLog('registered stream listener');
     } on Exception catch (e) {
       addLog('reader: ${e.toString()}');
     }
+  }
+
+  void extractMessages(Uint8List buffer) {
+    int messageStart = 0;
+
+    for (int i = 0; i < buffer.length; i++) {
+      // Check for start byte
+      if (buffer[i] == startByte) {
+        messageStart = i;
+        break;
+      }
+    }
+
+    // Check if a message starts within the buffer
+    if (messageStart > 0) {
+      for (int i = messageStart + 1; i < buffer.length; i++) {
+        // Check for stop byte
+        if (buffer[i] == stopByte) {
+          // Extract the message
+          final message = buffer.sublist(messageStart, i + 1);
+
+          // Validate CRC (implementation omitted here)
+          // if (isValidCRC(message)) {
+          onMessageReceived(message);
+          // }
+
+          // Update message start for remaining bytes
+          messageStart = i + 1;
+        }
+      }
+    }
+
+    // Keep remaining bytes for the next iteration
+    setState(() {
+      receivedStack.addAll(buffer.sublist(messageStart));
+    });
+  }
+
+  void onMessageReceived(Uint8List message) {
+    setState(() {
+      receivedStackCommands.insert(0, uint8ListToIntList(message));
+    });
   }
 
   void configurePort(port) {
@@ -263,10 +366,10 @@ class _HomeScreenState extends State<HomeScreen> {
     addLog('sending message: ${bytesToHex(bytes)}');
     await changeTxMode(true);
     final bytesWritten = selectedPort!.write(bytes);
-    addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
-    addLog('bytes written: $bytesWritten');
+    // addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
+    // addLog('bytes written: $bytesWritten');
     await Future.delayed(const Duration(milliseconds: 10));
-    addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
+    // addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
     await changeTxMode(false);
     addLog('Message sent');
   }
@@ -351,6 +454,29 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: ListView.builder(
                         itemBuilder: (context, index) => logs[index].toWidget(),
                         itemCount: logs.length,
+                      ),
+                    ),
+                    VerticalDivider(width: 1),
+                    Expanded(
+                      flex: 1,
+                      child: ListView.separated(
+                        itemBuilder: (context, index) =>
+                            Text(bytesToHex([receivedStack[index]])),
+                        itemCount: receivedStack.length,
+                        separatorBuilder: (context, index) =>
+                            receivedStack[index] == stopByte ||
+                                    receivedStack[index] == startByte
+                                ? Divider()
+                                : Container(),
+                      ),
+                    ),
+                    VerticalDivider(width: 1),
+                    Expanded(
+                      flex: 1,
+                      child: ListView.builder(
+                        itemBuilder: (context, index) =>
+                            Text(bytesToHex(receivedStackCommands[index])),
+                        itemCount: receivedStackCommands.length,
                       ),
                     ),
                   ],
