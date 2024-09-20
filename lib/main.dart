@@ -26,8 +26,42 @@ extension IntToString on int {
   }
 }
 
+int serialUartCrc16(Uint8List data) {
+  const List<int> crcTable = [
+    0x0000,
+    0x1021,
+    0x2042,
+    0x3063,
+    0x4084,
+    0x50a5,
+    0x60c6,
+    0x70e7,
+    0x8108,
+    0x9129,
+    0xa14a,
+    0xb16b,
+    0xc18c,
+    0xd1ad,
+    0xe1ce,
+    0xf1ef,
+  ];
+
+  int crc = 0xFFFF;
+
+  for (int i = 0; i < data.length; i++) {
+    int byte = data[i];
+    crc = (crc << 4) ^ crcTable[((crc >> 12) ^ (byte >> 4)) & 0x0F];
+    crc = (crc << 4) ^ crcTable[((crc >> 12) ^ (byte & 0x0F)) & 0x0F];
+  }
+
+  return crc & 0xFFFF;
+}
+
 String bytesToHex(List<int> bytes) {
-  return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join('');
+  return bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join(' ')
+      .toUpperCase();
 }
 
 String uint8ListToHex(Uint8List bytes) {
@@ -66,6 +100,30 @@ List<CommandDef> availableCommands = [
     command: [0x3A, 0x01, 0x68, 0x06, 0x00, 0x00, 0x00, 0x0D, 0x0A],
   ),
 ];
+
+int startFlag = 0x3A;
+int endFlag = 0x0D;
+int deviceAddress = 0x01;
+
+class CommandList {
+  static int testSignal = 0x64;
+  static int restartDevice = 0x65;
+  static int setMultiOut = 0x66;
+  static int readInputs = 0x67;
+  static int setSingleOut = 0x68;
+  static int readOutputs = 0x69;
+  static int readNtc = 0x70;
+}
+
+class DataList {
+  static int d00 = 0x00;
+  static int d01 = 0x01;
+  static int d02 = 0x02;
+  static int d03 = 0x03;
+  static int d04 = 0x04;
+  static int d05 = 0x05;
+  static int d06 = 0x06;
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -141,6 +199,27 @@ class _HomeScreenState extends State<HomeScreen> {
   bool txMode = false;
   bool ready = false;
   bool connectionStatus = false;
+  List<int> commandList = [
+    CommandList.testSignal,
+    CommandList.restartDevice,
+    CommandList.setMultiOut,
+    CommandList.readInputs,
+    CommandList.setSingleOut,
+    CommandList.readOutputs,
+    CommandList.readNtc,
+  ];
+  List<int> dataList = [
+    DataList.d00,
+    DataList.d01,
+    DataList.d02,
+    DataList.d03,
+    DataList.d04,
+    DataList.d05,
+    DataList.d06,
+  ];
+  late int selectedCommand;
+  late int selectedData1;
+  late int selectedData2;
 
   @override
   void initState() {
@@ -149,6 +228,9 @@ class _HomeScreenState extends State<HomeScreen> {
       initPin();
     }
     discoverPorts();
+    selectedCommand = commandList.first;
+    selectedData1 = dataList.first;
+    selectedData2 = dataList.first;
   }
 
   @override
@@ -260,15 +342,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void sendMessage(List<int> message) async {
     Uint8List bytes = Uint8List.fromList(message);
-    addLog('sending message: ${bytesToHex(bytes)}');
     await changeTxMode(true);
+    addLog('sending message: ${bytesToHex(bytes)}');
     final bytesWritten = selectedPort!.write(bytes);
-    addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
-    addLog('bytes written: $bytesWritten');
-    await Future.delayed(const Duration(milliseconds: 10));
-    addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
+    // addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
+    // addLog('bytes written: $bytesWritten');
+    await Future.delayed(const Duration(milliseconds: 2));
+    // addLog('bytesToWrite: ${selectedPort!.bytesToWrite}');
     await changeTxMode(false);
-    addLog('Message sent');
+    // addLog('Message sent');
   }
 
   Future<void> changeTxMode(bool value) async {
@@ -281,6 +363,22 @@ class _HomeScreenState extends State<HomeScreen> {
     } on Exception catch (e) {
       addLog('GPIO error:\n${e.toString()}');
     }
+  }
+
+  List<int> createCommand({required int function, int? data1, int? data2}) {
+    List<int> commandData = [
+      startFlag,
+      deviceAddress,
+      function,
+      data1 ?? DataList.d00,
+      data2 ?? DataList.d00,
+      DataList.d00,
+      DataList.d00,
+      endFlag,
+    ];
+    final crc = serialUartCrc16(intListToUint8List(commandData));
+    commandData.add(crc);
+    return commandData;
   }
 
   @override
@@ -329,32 +427,115 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                   ],
                 ),
-                body: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                body: Column(
+                  mainAxisSize: MainAxisSize.max,
                   children: [
-                    Expanded(
-                      flex: 1,
-                      child: ListView.separated(
-                        itemBuilder: (context, index) => ListTile(
-                          title: Text(availableCommands[index].name),
-                          onTap: () =>
-                              sendMessage(availableCommands[index].command),
+                    Row(
+                      children: [
+                        Text('Command: '),
+                        DropdownMenu<int>(
+                          label: Text('Command'),
+                          onSelected: (value) {
+                            setState(() {
+                              selectedCommand = value ?? 0;
+                            });
+                          },
+                          dropdownMenuEntries: commandList
+                              .map((e) => DropdownMenuEntry(
+                                    value: e,
+                                    label: bytesToHex([e]),
+                                  ))
+                              .toList(),
                         ),
-                        itemCount: availableCommands.length,
-                        separatorBuilder: (context, index) =>
-                            const Divider(height: 1),
-                      ),
+                        DropdownMenu<int>(
+                          label: Text('Data1'),
+                          onSelected: (value) {
+                            setState(() {
+                              selectedData1 = value ?? 0;
+                            });
+                          },
+                          dropdownMenuEntries: dataList
+                              .map((e) => DropdownMenuEntry(
+                                    value: e,
+                                    label: bytesToHex([e]),
+                                  ))
+                              .toList(),
+                        ),
+                        DropdownMenu<int>(
+                          label: Text('Data2'),
+                          onSelected: (value) {
+                            setState(() {
+                              selectedData2 = value ?? 0;
+                            });
+                          },
+                          dropdownMenuEntries: dataList
+                              .map((e) => DropdownMenuEntry(
+                                    value: e,
+                                    label: bytesToHex([e]),
+                                  ))
+                              .toList(),
+                        ),
+                        Expanded(
+                          child: Container(),
+                        ),
+                        Text(bytesToHex(createCommand(
+                          function: selectedCommand,
+                          data1: selectedData1,
+                          data2: selectedData2,
+                        ))),
+                        ElevatedButton(
+                          onPressed: () {
+                            sendMessage(createCommand(
+                              function: selectedCommand,
+                              data1: selectedData1,
+                              data2: selectedData2,
+                            ));
+                          },
+                          child: Text('Transmit'),
+                        ),
+                      ],
                     ),
-                    const VerticalDivider(width: 1),
+                    Divider(),
                     Expanded(
-                      flex: 3,
-                      child: ListView.builder(
-                        itemBuilder: (context, index) => logs[index].toWidget(),
-                        itemCount: logs.length,
-                      ),
-                    ),
+                        child: ListView.builder(
+                      itemBuilder: (context, index) => logs[index].toWidget(),
+                      itemCount: logs.length,
+                    )),
                   ],
                 ),
+
+                // Row(
+                //   crossAxisAlignment: CrossAxisAlignment.start,
+                //   children: [
+                //     Expanded(
+                //       flex: 1,
+                //       child: Column(
+                //         mainAxisSize: MainAxisSize.min,
+                //         children: [
+                //           Text('Command'),
+                //         ],
+                //       ),
+                //       //  ListView.separated(
+                //       //   itemBuilder: (context, index) => ListTile(
+                //       //     title: Text(availableCommands[index].name),
+                //       //     onTap: () =>
+                //       //         sendMessage(availableCommands[index].command),
+                //       //   ),
+                //       //   itemCount: availableCommands.length,
+                //       //   separatorBuilder: (context, index) =>
+                //       //       const Divider(height: 1),
+                //       // ),
+                //     ),
+                //     const VerticalDivider(width: 1),
+                //     Expanded(
+                //       flex: 3,
+                //       child: ListView.builder(
+                //         itemBuilder: (context, index) => logs[index].toWidget(),
+                //         itemCount: logs.length,
+                //       ),
+                //     ),
+                //   ],
+                // ),
               )
             : const Scaffold(
                 body: Center(
