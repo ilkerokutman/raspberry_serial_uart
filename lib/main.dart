@@ -117,6 +117,10 @@ List<CommandDef> availableCommands = [
     name: 'Read Inputs',
     command: [0x3A, 0x01, 0x67, 0x00, 0x00, 0x00, 0x00, 0x0D, 0x0A],
   ),
+  CommandDef(
+    name: 'Read NTC',
+    command: [0x3A, 0x01, 0x70, 0x01, 0x00, 0x00, 0x00, 0x0D, 0x0A],
+  ),
 ];
 
 void main() async {
@@ -196,10 +200,19 @@ class _HomeScreenState extends State<HomeScreen> {
   List<int> receivedStack = [];
   List<List<int>> receivedStackCommands = [];
   SerialMessageHandler handler = SerialMessageHandler();
+  late TextEditingController input1;
+  late TextEditingController input2;
+  late TextEditingController input3;
+  late TextEditingController input4;
+  List<int> textMessage = [];
 
   @override
   void initState() {
     super.initState();
+    input1 = TextEditingController(text: '0')..addListener(onTextChanged);
+    input2 = TextEditingController(text: '0')..addListener(onTextChanged);
+    input3 = TextEditingController(text: '0')..addListener(onTextChanged);
+    input4 = TextEditingController(text: '0')..addListener(onTextChanged);
     if (isPi) {
       initPin();
     }
@@ -238,6 +251,13 @@ class _HomeScreenState extends State<HomeScreen> {
     messageSubscription.cancel();
     closePort();
     handler.dispose();
+    input1.dispose();
+    input2.dispose();
+    input3.dispose();
+    input4.dispose();
+    if (isPi) {
+      pin.dispose();
+    }
     super.dispose();
   }
 
@@ -524,15 +544,57 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Expanded(
                       flex: 1,
-                      child: ListView.separated(
-                        itemBuilder: (context, index) => ListTile(
-                          title: Text(availableCommands[index].name),
-                          onTap: () =>
-                              sendMessage(availableCommands[index].command),
-                        ),
-                        itemCount: availableCommands.length,
-                        separatorBuilder: (context, index) =>
-                            const Divider(height: 1),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.max,
+                        children: [
+                          Expanded(
+                            child: ListView.separated(
+                              itemBuilder: (context, index) => ListTile(
+                                title: Text(availableCommands[index].name),
+                                onTap: () => sendMessage(
+                                    availableCommands[index].command),
+                              ),
+                              itemCount: availableCommands.length,
+                              separatorBuilder: (context, index) =>
+                                  const Divider(height: 1),
+                            ),
+                          ),
+                          Divider(),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                  child: TextField(
+                                controller: input1,
+                                style: TextStyle(fontSize: 10),
+                              )),
+                              Expanded(
+                                  child: TextField(
+                                controller: input2,
+                                style: TextStyle(fontSize: 10),
+                              )),
+                              Expanded(
+                                  child: TextField(
+                                controller: input3,
+                                style: TextStyle(fontSize: 10),
+                              )),
+                              Expanded(
+                                  child: TextField(
+                                controller: input4,
+                                style: TextStyle(fontSize: 10),
+                              )),
+                              IconButton(
+                                icon: Icon(Icons.send),
+                                onPressed: () {
+                                  //[0x3A, 0x01, 0x64, 0x41, 0x42, 0x00, 0x00, 0x0D, 0x0A]
+                                  onTextChanged();
+                                  sendMessage(textMessage);
+                                },
+                              ),
+                            ],
+                          ),
+                          Text('${textMessage.join('-')}'),
+                        ],
                       ),
                     ),
                     const VerticalDivider(width: 1),
@@ -574,6 +636,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: CircularProgressIndicator(),
                 ),
               );
+  }
+
+  void onTextChanged() {
+    List<int> message = [
+      0x3A,
+      int.parse(input1.text),
+      int.parse(input2.text),
+      int.parse(input3.text),
+      int.parse(input4.text),
+      0x00,
+      0x00,
+      0x0D,
+      0x0A
+    ];
+    setState(() {
+      textMessage = message;
+    });
   }
 
   void addLog(String data) => setState(() => logs.insert(0, LogDef.add(data)));
